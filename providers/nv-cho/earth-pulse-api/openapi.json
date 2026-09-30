@@ -1,0 +1,1067 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Earth Pulse regional hazard research API",
+    "version": "1.0.0",
+    "description": "Complete bounded regional hazard queries cost 0.01 USDC on Solana mainnet through x402 v2 exact. Invalid, unusable/stale and overly broad requests are rejected before payment. Results preserve source evidence, geometry semantics, timestamps, and coverage context."
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Fetch dataset and mainnet payment service readiness",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Dataset loaded and merchant RPC verified as mainnet. Source freshness and fee-payer funding require separate checks.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dataset or merchant configuration is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenApi",
+        "summary": "Fetch the public natural-hazard query API contract",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 contract for this service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "openapi",
+                    "info",
+                    "paths"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sources": {
+      "get": {
+        "operationId": "describeSources",
+        "summary": "List source freshness, coverage and supported query bounds",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Source metadata from the current sanitized dataset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcesResult"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No usable source dataset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/query": {
+      "post": {
+        "operationId": "queryHazards",
+        "summary": "Fetch regional hazard records and satellite fire cells",
+        "description": "Select records using source time in [from,to), maximum 24 hours. Point matching and geometry-bbox candidate overlap are explicit; satellite detections use whole fixed 1° cells. The service prepares and pins a complete result before issuing HTTP 402. A repeated paid key/query recovers the same result; a changed query under the same key conflicts. No pagination or silent truncation in v1.",
+        "x-price-usd": "0.01",
+        "x-payment-scheme": "x402-exact",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Unpredictable UUID or 32–96 letters, numbers, underscores or hyphens. Reuse for the payment client's retry and delivery recovery.",
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 96,
+              "pattern": "^[A-Za-z0-9_-]{32,96}$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "x402": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Query"
+              },
+              "example": {
+                "bbox": [
+                  -123,
+                  37,
+                  -122,
+                  38
+                ],
+                "hazards": [
+                  "earthquake"
+                ],
+                "from": "2026-09-30T18:00:00Z",
+                "to": "2026-09-30T19:00:00Z",
+                "limit": 100
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Complete pinned research response after verified payment, or a recovered paid result.",
+            "headers": {
+              "x-payment-response": {
+                "description": "Settlement receipt, only when genuinely supplied by the payment adapter.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_QUERY, UNSUPPORTED_DATELINE, IDEMPOTENCY_KEY_REQUIRED or INVALID_PAYMENT_PROOF; no payment challenge for invalid input.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Genuine x402 payment challenge for a prepared usable query. Network, asset and recipient are specified by the configured adapter.",
+            "headers": {
+              "PAYMENT-REQUIRED": {
+                "description": "Genuine x402 v2 challenge when supplied by the configured payment adapter.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency conflict or payment state conflict. Do not start another charge without reconciliation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "QUOTE_EXPIRED or RESULT_EXPIRED. Expired paid request identities will not be charged again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "QUERY_TOO_BROAD or QUERY_OUTSIDE_COVERAGE; narrow region, interval or hazard selection and stay within the recent seven-day horizon. No payment challenge.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "DATA_UNAVAILABLE, DATA_STALE, INVALID_DATASET, INVALID_SOURCE_DATA, service/payment not ready, or PAYMENT_SETTLEMENT_UNKNOWN. Do not automatically submit another charge after an uncertain settlement.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-pay-metering": {
+          "dimensions": [
+            {
+              "direction": "usage",
+              "unit": "requests",
+              "scale": 1,
+              "tiers": [
+                {
+                  "price_usd": 0.01
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "x402": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "PAYMENT-SIGNATURE",
+        "description": "x402 v2 proof produced by a compatible payment client after reading the genuine challenge. An arbitrary header is never accepted as payment."
+      }
+    },
+    "schemas": {
+      "Hazard": {
+        "type": "string",
+        "enum": [
+          "earthquake",
+          "wildfire",
+          "tornado",
+          "cyclone",
+          "tsunami"
+        ]
+      },
+      "BBox": {
+        "type": "array",
+        "minItems": 4,
+        "maxItems": 4,
+        "prefixItems": [
+          {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180
+          },
+          {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90
+          },
+          {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180
+          },
+          {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90
+          }
+        ],
+        "items": false,
+        "description": "WGS84 [west,south,east,north]. Query boxes require west<east and south<north; a record geometry bbox may be zero-area. Query antimeridian crossing is rejected in v1."
+      },
+      "Query": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bbox",
+          "hazards",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "bbox": {
+            "$ref": "#/components/schemas/BBox"
+          },
+          "hazards": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 5,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/Hazard"
+            },
+            "description": "Select one or more supported natural-hazard categories; results combine their event records and fire-observation cells."
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?Z$",
+            "description": "UTC ISO-8601 timestamp ending in Z."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?Z$",
+            "description": "UTC ISO-8601 timestamp ending in Z."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 100,
+            "description": "Combined records plus fireCells. Queries exceeding this count are rejected without truncation before payment."
+          }
+        },
+        "description": "UTC Z timestamps are normalized with toISOString. Require from<to and duration<=24 hours; from>=queryNow-minus-seven-days, and to cannot exceed the query clock by more than five minutes. Latest source snapshots, not a complete historical archive."
+      },
+      "ContextCodes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "uniqueItems": true
+      },
+      "Source": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "url",
+          "hazards",
+          "status",
+          "checkedAt",
+          "collectedAt",
+          "latestReportAt",
+          "coverageStart",
+          "coverageEnd",
+          "staleAfterMs",
+          "maxAgeMs",
+          "contextCodes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "hazards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Hazard"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "stale",
+              "error"
+            ]
+          },
+          "checkedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Successful source validation time, including unchanged responses."
+          },
+          "collectedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Time normalized snapshot content was captured."
+          },
+          "latestReportAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "UTC ISO-8601 timestamp ending in Z."
+          },
+          "staleAfterMs": {
+            "type": "number",
+            "minimum": 0
+          },
+          "coverageStart": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "coverageEnd": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "maxAgeMs": {
+            "type": "number",
+            "minimum": 0
+          },
+          "contextCodes": {
+            "$ref": "#/components/schemas/ContextCodes"
+          }
+        }
+      },
+      "Measurement": {
+        "type": "object",
+        "required": [
+          "value",
+          "unit"
+        ],
+        "properties": {
+          "value": {
+            "type": "number"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Source unit, or null for dimensionless or unprovided units; scale/description may supply additional meaning."
+          },
+          "scale": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "averagingMinutes": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        }
+      },
+      "Reference": {
+        "type": "object",
+        "required": [
+          "sourceId",
+          "url"
+        ],
+        "properties": {
+          "sourceId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "recordId": {
+            "type": "string"
+          }
+        }
+      },
+      "Geometry": {
+        "type": "object",
+        "required": [
+          "type",
+          "coordinates"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "Point",
+              "Polygon",
+              "MultiPolygon"
+            ]
+          },
+          "coordinates": {
+            "type": "array",
+            "items": {}
+          }
+        },
+        "description": "Validated source GeoJSON geometry. Point locations and polygon candidate overlaps do not establish exact hazard extent."
+      },
+      "Warning": {
+        "type": "object",
+        "required": [
+          "currentness"
+        ],
+        "properties": {
+          "currentness": {
+            "type": "string",
+            "enum": [
+              "active",
+              "expired",
+              "superseded",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "severity": {
+            "type": "string"
+          },
+          "urgency": {
+            "type": "string"
+          },
+          "certainty": {
+            "type": "string"
+          },
+          "messageType": {
+            "type": "string"
+          },
+          "references": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Record": {
+        "type": "object",
+        "required": [
+          "id",
+          "sourceId",
+          "hazard",
+          "kind",
+          "title",
+          "url",
+          "geometry",
+          "geometryBBox",
+          "spatialMatch",
+          "time",
+          "times",
+          "measurements",
+          "references",
+          "contextCodes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "hazard": {
+            "$ref": "#/components/schemas/Hazard"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "event",
+              "warning",
+              "catalog-event",
+              "bulletin"
+            ],
+            "description": "Source record kind. Advisory meaning is preserved in time.meaning and classification."
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "geometry": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Geometry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "geometryBBox": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BBox"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spatialMatch": {
+            "type": "string",
+            "enum": [
+              "point_in_bbox",
+              "geometry_bbox_overlap"
+            ],
+            "description": "geometry_bbox_overlap is a candidate spatial match, not exact polygon intersection."
+          },
+          "time": {
+            "type": "object",
+            "required": [
+              "value",
+              "meaning"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "format": "date-time",
+                "description": "UTC ISO-8601 timestamp ending in Z."
+              },
+              "meaning": {
+                "type": "string",
+                "enum": [
+                  "occurrence",
+                  "advisory_issued",
+                  "alert_issued",
+                  "geometry_report",
+                  "bulletin_updated",
+                  "advisory_valid"
+                ]
+              }
+            }
+          },
+          "times": {
+            "type": "object",
+            "properties": {
+              "observedAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "UTC ISO-8601 timestamp ending in Z."
+              },
+              "issuedAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "UTC ISO-8601 timestamp ending in Z."
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "UTC ISO-8601 timestamp ending in Z."
+              },
+              "expiresAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "UTC ISO-8601 timestamp ending in Z."
+              },
+              "effectiveAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "UTC ISO-8601 timestamp ending in Z."
+              },
+              "onsetAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "UTC ISO-8601 timestamp ending in Z."
+              }
+            }
+          },
+          "measurements": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Measurement"
+            }
+          },
+          "classification": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Source-specific classification fields; no universal severity or confidence score."
+          },
+          "warning": {
+            "$ref": "#/components/schemas/Warning"
+          },
+          "references": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Reference"
+            }
+          },
+          "contextCodes": {
+            "$ref": "#/components/schemas/ContextCodes"
+          }
+        }
+      },
+      "FireCell": {
+        "type": "object",
+        "required": [
+          "id",
+          "sourceId",
+          "hazard",
+          "kind",
+          "bbox",
+          "centroid",
+          "resolutionDegrees",
+          "observedAt",
+          "count",
+          "highConfidenceCount",
+          "nominalConfidenceCount",
+          "platform",
+          "spatialMatch",
+          "partialOverlap",
+          "contextCodes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "hazard": {
+            "const": "wildfire"
+          },
+          "kind": {
+            "const": "thermal-observation-cell"
+          },
+          "bbox": {
+            "$ref": "#/components/schemas/BBox"
+          },
+          "centroid": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [
+              {
+                "type": "number",
+                "minimum": -180,
+                "maximum": 180
+              },
+              {
+                "type": "number",
+                "minimum": -90,
+                "maximum": 90
+              }
+            ],
+            "items": false,
+            "description": "[longitude,latitude] average detection location."
+          },
+          "resolutionDegrees": {
+            "const": 1
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC ISO-8601 timestamp ending in Z."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "highConfidenceCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "nominalConfidenceCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "platform": {
+            "type": "string"
+          },
+          "spatialMatch": {
+            "const": "cell_bbox_overlap"
+          },
+          "partialOverlap": {
+            "type": "boolean",
+            "description": "True when the query bbox does not fully contain the intersecting fixed cell; counts still cover the whole cell."
+          },
+          "contextCodes": {
+            "$ref": "#/components/schemas/ContextCodes"
+          }
+        },
+        "description": "One fixed 1° cell, one platform and one acquisition minute. Whole-cell observations include partial bbox overlaps; repeated passes are separate observations, not distinct fire incidents."
+      },
+      "Counts": {
+        "type": "object",
+        "required": [
+          "records",
+          "fireCells",
+          "satelliteDetections",
+          "totalItems",
+          "unlocatedRecords",
+          "expiredWarnings",
+          "supersededWarnings"
+        ],
+        "properties": {
+          "records": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "fireCells": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "satelliteDetections": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "totalItems": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unlocatedRecords": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expiredWarnings": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "supersededWarnings": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "description": "totalItems=records+fireCells; satelliteDetections=sum of returned cell counts. No truncation."
+      },
+      "QueryResult": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "normalizationVersion",
+          "datasetId",
+          "exportedAt",
+          "query",
+          "sources",
+          "records",
+          "fireCells",
+          "counts",
+          "contextCodes"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "1.0"
+          },
+          "normalizationVersion": {
+            "const": "1"
+          },
+          "datasetId": {
+            "type": "string"
+          },
+          "exportedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC ISO-8601 timestamp ending in Z."
+          },
+          "query": {
+            "$ref": "#/components/schemas/Query"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Source"
+            }
+          },
+          "records": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/Record"
+            }
+          },
+          "fireCells": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/FireCell"
+            }
+          },
+          "counts": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "contextCodes": {
+            "$ref": "#/components/schemas/ContextCodes"
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Hashed idempotent request identity added by paid delivery."
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentSummary"
+          }
+        }
+      },
+      "SourcesResult": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "datasetId",
+          "exportedAt",
+          "sources",
+          "queryBounds",
+          "price"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "1.0"
+          },
+          "datasetId": {
+            "type": "string"
+          },
+          "exportedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC ISO-8601 timestamp ending in Z."
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Source"
+            }
+          },
+          "queryBounds": {
+            "type": "object",
+            "required": [
+              "maxWindowHours",
+              "maxResults",
+              "antimeridian"
+            ],
+            "properties": {
+              "maxWindowHours": {
+                "const": 24
+              },
+              "maxResults": {
+                "const": 100
+              },
+              "antimeridian": {
+                "const": false
+              }
+            }
+          },
+          "price": {
+            "type": "object",
+            "required": [
+              "usd",
+              "scheme",
+              "mode"
+            ],
+            "properties": {
+              "usd": {
+                "const": "0.01"
+              },
+              "scheme": {
+                "const": "x402-exact"
+              },
+              "mode": {
+                "const": "mainnet"
+              }
+            }
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "status",
+          "service"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "not_ready"
+            ]
+          },
+          "service": {
+            "const": "earth-pulse-api"
+          },
+          "mode": {
+            "const": "mainnet"
+          },
+          "datasetId": {
+            "type": "string"
+          },
+          "exportedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC ISO-8601 timestamp ending in Z."
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "PaymentSummary": {
+        "type": "object",
+        "required": [
+          "priceUsd",
+          "currency",
+          "transaction",
+          "network",
+          "mode",
+          "realFunds"
+        ],
+        "properties": {
+          "priceUsd": {
+            "const": "0.01"
+          },
+          "currency": {
+            "const": "USDC"
+          },
+          "transaction": {
+            "type": "string"
+          },
+          "network": {
+            "const": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+          },
+          "mode": {
+            "const": "mainnet"
+          },
+          "realFunds": {
+            "const": true
+          }
+        }
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "https://earth-pulse-api.agentico-labs.workers.dev",
+      "description": "Earth Pulse API"
+    }
+  ]
+}
