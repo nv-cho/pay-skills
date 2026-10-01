@@ -3,7 +3,7 @@
   "info": {
     "title": "Earth Pulse regional hazard research API",
     "version": "1.0.0",
-    "description": "Complete bounded regional hazard queries cost 0.01 USDC on Solana mainnet through x402 v2 exact. Invalid, unusable/stale and overly broad requests are rejected before payment. Results preserve source evidence, geometry semantics, timestamps, and coverage context."
+    "description": "Complete bounded regional hazard queries cost 0.05 USDC on Solana mainnet through x402 v2 exact. Invalid, unusable/stale and overly broad requests are rejected before payment. Results preserve source evidence, geometry semantics, timestamps, and coverage context."
   },
   "paths": {
     "/health": {
@@ -91,21 +91,33 @@
     "/v1/query": {
       "post": {
         "operationId": "queryHazards",
-        "summary": "Fetch regional hazard records and satellite fire cells",
-        "description": "Select records using source time in [from,to), maximum 24 hours. Point matching and geometry-bbox candidate overlap are explicit; satellite detections use whole fixed 1° cells. The service prepares and pins a complete result before issuing HTTP 402. A repeated paid key/query recovers the same result; a changed query under the same key conflicts. No pagination or silent truncation in v1.",
-        "x-price-usd": "0.01",
+        "summary": "Complete bounded regional hazard research query",
+        "description": "Prepare and pin a complete regional result before HTTP 402. Omit both from/to for the preceding 24 hours, frozen for this purchase. Supply an optional unpredictable Idempotency-Key for retries from the first request, or preserve the server purchase URL carried in the x402 resource. Pay returns that resource in its payment proof. The same identity and query recover a settled result for 24 hours; changed queries conflict. Paid retries without an existing identity fail before settlement. No pagination or silent truncation.",
+        "x-price-usd": "0.05",
         "x-payment-scheme": "x402-exact",
         "parameters": [
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "required": true,
-            "description": "Unpredictable UUID or 32–96 letters, numbers, underscores or hyphens. Reuse for the payment client's retry and delivery recovery.",
+            "required": false,
+            "description": "Optional unpredictable UUID or 32\u201396 letters, numbers, underscores or hyphens. Preserve it with the same body for retries, including loss of the first offer. If omitted, the unpaid offer supplies a purchase URL.",
             "schema": {
               "type": "string",
               "minLength": 32,
               "maxLength": 96,
               "pattern": "^[A-Za-z0-9_-]{32,96}$"
+            }
+          },
+          {
+            "name": "purchase",
+            "in": "query",
+            "required": false,
+            "description": "Opaque reference from quote.purchaseUrl or the x402 resource URL. Reuse only an existing purchase with the same body for payment or recovery. Treat this URL as private.",
+            "schema": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$"
             }
           }
         ],
@@ -131,8 +143,6 @@
                 "hazards": [
                   "earthquake"
                 ],
-                "from": "2026-09-30T18:00:00Z",
-                "to": "2026-09-30T19:00:00Z",
                 "limit": 100
               }
             }
@@ -158,7 +168,7 @@
             }
           },
           "400": {
-            "description": "INVALID_QUERY, UNSUPPORTED_DATELINE, IDEMPOTENCY_KEY_REQUIRED or INVALID_PAYMENT_PROOF; no payment challenge for invalid input.",
+            "description": "Invalid query, key, purchase reference or payment proof, including a paid retry without a purchase identity. No settlement is attempted.",
             "content": {
               "application/json": {
                 "schema": {
@@ -181,13 +191,71 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "additionalProperties": true,
+                  "required": [
+                    "x402Version",
+                    "resource",
+                    "accepts",
+                    "quote"
+                  ],
+                  "properties": {
+                    "x402Version": {
+                      "const": 2
+                    },
+                    "resource": {
+                      "type": "object",
+                      "required": [
+                        "url"
+                      ],
+                      "properties": {
+                        "url": {
+                          "type": "string",
+                          "format": "uri",
+                          "description": "Purchase URL for this prepared result. x402 v2 clients return it in the payment proof."
+                        }
+                      }
+                    },
+                    "accepts": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "quote": {
+                      "type": "object",
+                      "required": [
+                        "requestId",
+                        "purchaseUrl",
+                        "expiresAt",
+                        "resultPrepared"
+                      ],
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "description": "Opaque purchase identity."
+                        },
+                        "purchaseUrl": {
+                          "type": "string",
+                          "format": "uri",
+                          "description": "Preserve this private URL and the original body for payment retry or recovery."
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "resultPrepared": {
+                          "const": true
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "409": {
-            "description": "Idempotency conflict or payment state conflict. Do not start another charge without reconciliation.",
+            "description": "Query, purchase reference, payment terms or proof conflict; or payment in progress. Preserve the original purchase identity and recover it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -197,7 +265,7 @@
             }
           },
           "410": {
-            "description": "QUOTE_EXPIRED or RESULT_EXPIRED. Expired paid request identities will not be charged again.",
+            "description": "Quote or result expired, or purchase reference unknown/no longer retained. No replacement purchase or settlement is attempted.",
             "content": {
               "application/json": {
                 "schema": {
@@ -235,7 +303,7 @@
               "scale": 1,
               "tiers": [
                 {
-                  "price_usd": 0.01
+                  "price_usd": 0.05
                 }
               ]
             }
@@ -298,9 +366,7 @@
         "additionalProperties": false,
         "required": [
           "bbox",
-          "hazards",
-          "from",
-          "to"
+          "hazards"
         ],
         "properties": {
           "bbox": {
@@ -314,19 +380,19 @@
             "items": {
               "$ref": "#/components/schemas/Hazard"
             },
-            "description": "Select one or more supported natural-hazard categories; results combine their event records and fire-observation cells."
+            "description": "Select the hazard types to include in the regional result."
           },
           "from": {
             "type": "string",
             "format": "date-time",
             "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?Z$",
-            "description": "UTC ISO-8601 timestamp ending in Z."
+            "description": "Optional with to. UTC Z interval start, inclusive. Omit both dates for the preceding 24 hours, frozen at preparation."
           },
           "to": {
             "type": "string",
             "format": "date-time",
             "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?Z$",
-            "description": "UTC ISO-8601 timestamp ending in Z."
+            "description": "Optional with from. UTC Z interval end, exclusive. Omit both dates to use the frozen default interval."
           },
           "limit": {
             "type": "integer",
@@ -336,7 +402,15 @@
             "description": "Combined records plus fireCells. Queries exceeding this count are rejected without truncation before payment."
           }
         },
-        "description": "UTC Z timestamps are normalized with toISOString. Require from<to and duration<=24 hours; from>=queryNow-minus-seven-days, and to cannot exceed the query clock by more than five minutes. Latest source snapshots, not a complete historical archive."
+        "description": "bbox and hazards are required. Supply both UTC Z dates or omit both for the preceding 24 hours. Explicit dates require from<to, duration<=24 hours, from within the recent seven days and to no more than five minutes ahead. Retrying an existing purchase preserves its original interval. Latest source snapshots, not a complete historical archive.",
+        "dependentRequired": {
+          "from": [
+            "to"
+          ],
+          "to": [
+            "from"
+          ]
+        }
       },
       "ContextCodes": {
         "type": "array",
@@ -790,7 +864,7 @@
             "$ref": "#/components/schemas/ContextCodes"
           }
         },
-        "description": "One fixed 1° cell, one platform and one acquisition minute. Whole-cell observations include partial bbox overlaps; repeated passes are separate observations, not distinct fire incidents."
+        "description": "One fixed 1\u00b0 cell, one platform and one acquisition minute. Whole-cell observations include partial bbox overlaps; repeated passes are separate observations, not distinct fire incidents."
       },
       "Counts": {
         "type": "object",
@@ -847,7 +921,8 @@
           "records",
           "fireCells",
           "counts",
-          "contextCodes"
+          "contextCodes",
+          "generatedAt"
         ],
         "properties": {
           "schemaVersion": {
@@ -862,10 +937,22 @@
           "exportedAt": {
             "type": "string",
             "format": "date-time",
-            "description": "UTC ISO-8601 timestamp ending in Z."
+            "description": "Time the underlying dataset snapshot was exported."
           },
           "query": {
-            "$ref": "#/components/schemas/Query"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Query"
+              },
+              {
+                "required": [
+                  "from",
+                  "to",
+                  "limit"
+                ]
+              }
+            ],
+            "description": "Canonical query with concrete dates and result limit, including resolved defaults."
           },
           "sources": {
             "type": "array",
@@ -895,10 +982,24 @@
           },
           "requestId": {
             "type": "string",
-            "description": "Hashed idempotent request identity added by paid delivery."
+            "description": "Opaque purchase identity added by paid delivery."
           },
           "payment": {
             "$ref": "#/components/schemas/PaymentSummary"
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Time this query result was prepared and pinned; unchanged on paid recovery."
+          },
+          "healthRevision": {
+            "type": "string",
+            "description": "Revision of source freshness metadata used by this result, when available."
+          },
+          "purchaseUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "Private URL for this purchase. POST the original body here to recover a settled result within 24 hours without payment."
           }
         }
       },
@@ -958,7 +1059,7 @@
             ],
             "properties": {
               "usd": {
-                "const": "0.01"
+                "const": "0.05"
               },
               "scheme": {
                 "const": "x402-exact"
@@ -1037,7 +1138,9 @@
         ],
         "properties": {
           "priceUsd": {
-            "const": "0.01"
+            "type": "string",
+            "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,6})?$",
+            "description": "USDC price fixed when this purchase was prepared. Recovered purchases retain their original price."
           },
           "currency": {
             "const": "USDC"
